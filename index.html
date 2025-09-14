@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>RSVP Dashboard (Clean — Real Table, No Views)</title>
+  <meta name="theme-color" content="#6d5bd0">
+  <style>
+    :root{
+      --ink:#111827; --muted:#6b7280; --bg:#fafafa; --card:#fff; --border:#e5e7eb; --accent:#6d5bd0;
+      --good:#10b981; --maybe:#f59e0b; --bad:#ef4444;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0;font-family:Inter,system-ui,-apple-system,Segui UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink)}
+    header{position:sticky;top:0;background:#fff;box-shadow:0 6px 18px rgba(0,0,0,.08);padding:14px 16px;z-index:5}
+    h1{margin:0;font-size:clamp(1.1rem,2.5vw,1.35rem)}
+    .wrap{max-width:1100px;margin:0 auto;padding:12px 16px}
+    .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0 10px}
+    .chip{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:999px;background:#fff;color:#374151;font-size:.92rem}
+    .chip strong{font-weight:600}
+    .controls{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0 6px}
+    input[type="search"]{padding:10px 12px;border-radius:10px;border:1px solid var(--border);min-width:220px;outline:none}
+    button{padding:10px 14px;border-radius:10px;border:1px solid var(--border);background:#fff;cursor:pointer}
+    button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+    .table-wrap{background:#fff;border:1px solid var(--border);border-radius:12px;overflow:auto;-webkit-overflow-scrolling:touch}
+    table{width:100%;border-collapse:separate;border-spacing:0;min-width:720px}
+    thead th{position:sticky;top:0;background:#f8f8ff;border-bottom:1px solid var(--border);text-align:left;padding:12px 14px;font-weight:600}
+    tbody td{padding:12px 14px;border-bottom:1px solid var(--border)}
+    tbody tr:nth-child(odd){background:#fcfcff}
+    tbody tr:hover{background:#f6f6ff}
+    th.r, td.r{text-align:right}
+    .badge{display:inline-block;padding:.2rem .55rem;border-radius:999px;font-size:.85rem;font-weight:600}
+    .b-yes{background:rgba(16,185,129,.12);color:var(--good);border:1px solid rgba(16,185,129,.35)}
+    .b-maybe{background:rgba(245,158,11,.12);color:var(--maybe);border:1px solid rgba(245,158,11,.35)}
+    .b-no{background:rgba(239,68,68,.12);color:var(--bad);border:1px solid rgba(239,68,68,.35)}
+    .empty{padding:24px;color:var(--muted)}
+    footer{color:var(--muted);font-size:.9rem;margin:10px 0}
+    @media (max-width:700px){
+      th, td { padding:10px; font-size:.95rem }
+      .wrap{padding:10px}
+      input, button{padding:10px 12px}
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>🎉 RSVP Dashboard</h1>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div class="bar" id="chips">
+      <span class="chip" id="guestCount">Guests: <strong>0</strong></span>
+      <span class="chip" id="rsvpCount">RSVPs: <strong>0</strong></span>
+      <span class="chip" id="allergiesCount">Allergies: <strong>0</strong></span>
+    </div>
+
+    <div class="controls">
+      <input id="q" type="search" placeholder="Search guest or allergy…">
+      <button id="filterAll">All</button>
+      <button id="filterYes">Yes</button>
+      <button id="filterMaybe">Maybe</button>
+      <button id="filterNo">No</button>
+      <div style="flex:1"></div>
+      <button id="refresh">Refresh</button>
+      <button id="export" class="primary">Export CSV</button>
+    </div>
+
+    <div class="table-wrap">
+      <table id="tbl">
+        <thead>
+          <tr>
+            <th>Guest</th>
+            <th>Allergies / Dietary</th>
+            <th class="r">Last RSVP</th>
+            <th class="r">RSVP Time</th>
+          </tr>
+        </thead>
+        <tbody id="rows">
+          <tr><td class="empty" colspan="4">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <footer>Real table layout on mobile (scroll sideways if needed). “Views” removed for a cleaner UI.</footer>
+  </main>
+
+  <script type="module">
+    // --- Firebase (modular v10) ---
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import {
+      getFirestore, collection, query, orderBy, onSnapshot, getDocs
+    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyDtC4RvoYxotfxDyp32gjeFediehdaWrLs",
+      authDomain: "cali-s-birthday.firebaseapp.com",
+      projectId: "cali-s-birthday",
+      storageBucket: "cali-s-birthday.firebasestorage.app",
+      messagingSenderId: "68111770262",
+      appId: "1:68111770262:web:bda1b19bf7daffd59bd8b7",
+      measurementId: "G-4S02N4P70L"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    // --- State ---
+    const state = {
+      rsvps: [],
+      allergies: [],
+      filter: "ALL", // ALL | YES | MAYBE | NO
+      q: ""
+    };
+
+    // --- DOM ---
+    const rowsEl = document.getElementById("rows");
+    const guestCountEl = document.getElementById("guestCount").querySelector("strong");
+    const rsvpCountEl = document.getElementById("rsvpCount").querySelector("strong");
+    const allergiesCountEl = document.getElementById("allergiesCount").querySelector("strong");
+    const qInput = document.getElementById("q");
+
+    // --- Helpers ---
+    const badge = (choice) => {
+      const val = (String(choice||"").trim().toLowerCase());
+      if (val === "yes") return `<span class="badge b-yes">Yes</span>`;
+      if (val === "maybe") return `<span class="badge b-maybe">Maybe</span>`;
+      if (val === "no") return `<span class="badge b-no">No</span>`;
+      return "";
+    };
+    const fmt = (ts) => {
+      if (!ts) return "";
+      try{
+        const d = (ts.seconds) ? new Date(ts.seconds*1000) : new Date(ts);
+        // UK-style date & time
+        return d.toLocaleString("en-GB", {
+          year:"numeric", month:"short", day:"2-digit",
+          hour:"2-digit", minute:"2-digit"
+        });
+      }catch(e){ return ""; }
+    };
+
+    function normalizeName(x){
+      return String(x||"").trim();
+    }
+
+    // Merge rsvps + allergies into rows keyed by guest name
+    function buildRows(){
+      const byName = new Map();
+      // allergies
+      for(const a of state.allergies){
+        const name = normalizeName(a.name || a.guest || a.to);
+        if (!name) continue;
+        const row = byName.get(name) || { name, allergy:"", lastChoice:"", rsvpTime:null };
+        row.allergy = a.allergy || a.note || a.details || "";
+        byName.set(name, row);
+      }
+      // rsvps
+      for(const r of state.rsvps){
+        const name = normalizeName(r.name || r.to);
+        if (!name) continue;
+        const row = byName.get(name) || { name, allergy:"", lastChoice:"", rsvpTime:null };
+        row.lastChoice = r.choice || r.status || row.lastChoice;
+        // prefer latest timestamp if present
+        const t = r.ts || r.time || r.timestamp;
+        if (!row.rsvpTime || (t?.seconds||0) > (row.rsvpTime?.seconds||0)) {
+          row.rsvpTime = t || row.rsvpTime;
+        }
+        byName.set(name, row);
+      }
+      return [...byName.values()].sort((a,b)=> (a.name||"").localeCompare(b.name||""));
+    }
+
+    function rebuild(){
+      const allRows = buildRows();
+
+      // counts
+      guestCountEl.textContent = allRows.length.toString();
+      rsvpCountEl.textContent = state.rsvps.length.toString();
+      allergiesCountEl.textContent = state.allergies.length.toString();
+
+      // filter + search
+      const q = state.q.toLowerCase();
+      const filtered = allRows.filter(row=>{
+        const passFilter = state.filter==="ALL"
+          || (state.filter==="YES" && String(row.lastChoice).toLowerCase()==="yes")
+          || (state.filter==="MAYBE" && String(row.lastChoice).toLowerCase()==="maybe")
+          || (state.filter==="NO" && String(row.lastChoice).toLowerCase()==="no");
+        if (!passFilter) return false;
+        if (!q) return true;
+        return (row.name||"").toLowerCase().includes(q) || (row.allergy||"").toLowerCase().includes(q);
+      });
+
+      // draw
+      if (!filtered.length){
+        rowsEl.innerHTML = `<tr><td class="empty" colspan="4">No data</td></tr>`;
+        return;
+      }
+      const frag = document.createDocumentFragment();
+      for(const row of filtered){
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${row.name}</td>
+          <td>${row.allergy||""}</td>
+          <td class="r">${badge(row.lastChoice)}</td>
+          <td class="r">${fmt(row.rsvpTime)}</td>
+        `;
+        frag.appendChild(tr);
+      }
+      rowsEl.innerHTML = "";
+      rowsEl.appendChild(frag);
+    }
+
+    // --- Streams ---
+    async function attachStreams(){
+      const qR = query(collection(db, "rsvps"), orderBy("ts","desc"));
+      const qA = query(collection(db, "allergies"), orderBy("ts","desc"));
+
+      onSnapshot(qR, (snap)=>{
+        state.rsvps = snap.docs.map(d=> d.data());
+        rebuild();
+      }, async ()=>{
+        await fallbackLoad();
+        rebuild();
+      });
+
+      onSnapshot(qA, (snap)=>{
+        state.allergies = snap.docs.map(d=> d.data());
+        rebuild();
+      }, async ()=>{
+        await fallbackLoad();
+        rebuild();
+      });
+    }
+
+    async function fallbackLoad(){
+      // One-time fetch if onSnapshot fails (e.g., offline or rules)
+      try{
+        const [r,a] = await Promise.all([
+          getDocs(collection(db,"rsvps")),
+          getDocs(collection(db,"allergies")),
+        ]);
+        state.rsvps = r.docs.map(d=>d.data());
+        state.allergies = a.docs.map(d=>d.data());
+      }catch(e){ /* ignore */ }
+    }
+
+    async function refreshOnce(){
+      await fallbackLoad();
+      rebuild();
+    }
+
+    // --- Events ---
+    document.getElementById("filterAll").addEventListener("click", ()=>{ state.filter="ALL"; rebuild(); });
+    document.getElementById("filterYes").addEventListener("click", ()=>{ state.filter="YES"; rebuild(); });
+    document.getElementById("filterMaybe").addEventListener("click", ()=>{ state.filter="MAYBE"; rebuild(); });
+    document.getElementById("filterNo").addEventListener("click", ()=>{ state.filter="NO"; rebuild(); });
+    document.getElementById("refresh").addEventListener("click", refreshOnce);
+    document.getElementById("export").addEventListener("click", ()=>{
+      const rows = [["Guest","Allergies / Dietary","Last RSVP","RSVP Time"]];
+      for(const r of buildRows()){
+        rows.push([
+          r.name || "",
+          (r.allergy||"").replace(/\n/g," ").trim(),
+          String(r.lastChoice||""),
+          fmt(r.rsvpTime)
+        ]);
+      }
+      const csv = rows.map(row=> row.map(v=> `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+      const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "rsvps.csv";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    });
+
+    qInput.addEventListener("input", (e)=>{
+      state.q = e.target.value || "";
+      rebuild();
+    });
+
+    // kick off
+    attachStreams();
+  </script>
+</body>
+</html>
