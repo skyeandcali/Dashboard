@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cali’s Party — Guest List & Activity</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;background:#fafafa;color:#222}
+    header{padding:16px 14px;background:#fff;box-shadow:0 2px 12px rgba(0,0,0,.06);position:sticky;top:0;z-index:2}
+    h1{margin:0;font-size:1.25rem}
+    .wrap{max-width:1100px;margin:0 auto;padding:14px}
+    .grid{display:grid;grid-template-columns:1fr;gap:14px}
+    .card{background:#fff;border-radius:12px;box-shadow:0 10px 24px rgba(0,0,0,.06);padding:12px}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:10px;border-bottom:1px solid #eee;text-align:left;font-size:.95rem;vertical-align:top}
+    th{font-weight:700;background:#f7f7ff}
+    .muted{color:#666;font-size:.9rem}
+    .flex{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    input,button{padding:10px;border-radius:8px;border:1px solid #e2e2e2}
+    button{background:#BBA5E3;font-weight:800;cursor:pointer}
+    .small{font-size:.85rem;color:#666}
+    #error{color:red;font-weight:700;margin-top:10px}
+  </style>
+</head>
+<body>
+  <header><h1>Cali’s Party — Guest List & Activity</h1></header>
+  <div class="wrap grid">
+    <div class="card">
+      <div class="flex">
+        <input id="search" placeholder="Filter by name…" />
+        <button id="export">Export CSV</button>
+        <span class="small">Shows latest RSVP per guest, total views, and latest <b>allergy note</b>.</span>
+      </div>
+      <div id="error"></div>
+    </div>
+
+    <div class="card">
+      <table id="table">
+        <thead>
+          <tr>
+            <th>Guest</th>
+            <th>Kids</th>
+            <th>Adults</th>
+            <th>Allergies / Dietary</th>
+            <th>Last Viewed</th>
+            <th>Total Views</th>
+            <th>Last RSVP</th>
+            <th>RSVP Time</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getFirestore, collection, query, orderBy, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyDtC4RvoYxotfxDyp32gjeFediehdaWrLs",
+      authDomain: "cali-s-birthday.firebaseapp.com",
+      projectId: "cali-s-birthday",
+      storageBucket: "cali-s-birthday.firebasestorage.app",
+      messagingSenderId: "68111770262",
+      appId: "1:68111770262:web:fe550fad91db7d409bd8b7",
+      measurementId: "G-50S5Y76DMQ"
+    };
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    const viewQ = query(collection(db, "views"), orderBy("ts","desc"));
+    const rsvpQ = query(collection(db, "rsvps"), orderBy("ts","desc"));
+    const allergyQ = query(collection(db, "allergies"), orderBy("ts","desc"));
+
+    const state = { views: [], rsvps: [], allergies: [] };
+
+    function fmtTs(ts){
+      if(!ts) return "";
+      const d = ts.toDate ? ts.toDate() : new Date(ts);
+      return d.toLocaleString();
+    }
+
+    function rebuild(){
+      const map = new Map();
+      const ensure = (key)=>{
+        if(!map.has(key)) map.set(key, {name:key, kids:"", adults:"", allergy:"", views:0, lastView:null, lastRsvp:"", rsvpTime:null});
+        return map.get(key);
+      };
+
+      for(const v of state.views){
+        const key = (v.to || "Unknown").trim();
+        const row = ensure(key);
+        row.views += 1;
+        if(!row.lastView || (v.ts && v.ts.toMillis && v.ts.toMillis() > (row.lastView?.toMillis?.()||0))) row.lastView = v.ts;
+        row.kids = v.kids || row.kids;
+        row.adults = v.adults || row.adults;
+        row.allergy = v.allergy || row.allergy;
+      }
+      for(const a of state.allergies){
+        const key = (a.to || "Unknown").trim();
+        const row = ensure(key);
+        if (a.allergy) row.allergy = a.allergy;
+      }
+      for(const r of state.rsvps){
+        const key = (r.to || "Unknown").trim();
+        const row = ensure(key);
+        row.kids = r.kids || row.kids;
+        row.adults = r.adults || row.adults;
+        if (r.allergy) row.allergy = r.allergy;
+        row.lastRsvp = r.choice || row.lastRsvp;
+        row.rsvpTime = r.ts || row.rsvpTime;
+      }
+
+      const filter = document.getElementById("search").value.toLowerCase();
+      const tbody = document.querySelector("#table tbody");
+      tbody.innerHTML = "";
+      [...map.values()].sort((a,b)=>a.name.localeCompare(b.name)).forEach(row=>{
+        if(filter && !row.name.toLowerCase().includes(filter)) return;
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${row.name}</td>
+          <td>${row.kids}</td>
+          <td>${row.adults}</td>
+          <td>${row.allergy || ""}</td>
+          <td>${fmtTs(row.lastView)}</td>
+          <td>${row.views}</td>
+          <td>${row.lastRsvp}</td>
+          <td>${fmtTs(row.rsvpTime)}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    try {
+      onSnapshot(viewQ, (snap)=>{ state.views = snap.docs.map(d=>d.data()); rebuild(); });
+      onSnapshot(rsvpQ, (snap)=>{ state.rsvps = snap.docs.map(d=>d.data()); rebuild(); });
+      onSnapshot(allergyQ, (snap)=>{ state.allergies = snap.docs.map(d=>d.data()); rebuild(); });
+    } catch (err) {
+      document.getElementById("error").textContent = "Could not load data — check Firebase rules or connection.";
+      console.error(err);
+    }
+
+    document.getElementById("search").addEventListener("input", rebuild);
+    document.getElementById("export").addEventListener("click", ()=>{
+      const rows = [["Guest","Kids","Adults","Allergies / Dietary","Last Viewed","Total Views","Last RSVP","RSVP Time"]];
+      document.querySelectorAll("#table tbody tr").forEach(tr=>{
+        const cols = [...tr.children].map(td=> `"${(td.textContent||"").replace(/"/g,'""')}"`);
+        rows.push(cols);
+      });
+      const csv = rows.map(r=>r.join(",")).join("\n");
+      const blob = new Blob([csv], {type:"text/csv"});
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "guest_list.csv";
+      a.click();
+    });
+  </script>
+</body>
+</html>
